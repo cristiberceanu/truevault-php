@@ -38,9 +38,11 @@ class TrueVaultException extends Exception
      * @internal param array $result The result from the API server
      */
     public function __construct($message, $code, $type = "Exception") {
+
         $this->message = $message;
         $this->code = $code;
         $this->type = $type;
+
     }
 
     /**
@@ -65,6 +67,7 @@ class TrueVaultException extends Exception
      */
     public function __toString() {
         return $this->type . ": " . $this->message;
+
     }
 }
 
@@ -81,7 +84,7 @@ class TrueVault {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 60,
         CURLOPT_USERAGENT      => "truevault-php"
-    );
+        );
 
     /**
      * @var string
@@ -175,15 +178,17 @@ class TrueVault {
      */
     public function api($path, $method = "GET", $params = array()) {
         $url = $this->getUrl($path);
-
         $ch = curl_init();
         $opts = self::$CURL_OPTS;
 
-        // pass post fields as string instead of array so curl file uploads are not supported here
+        // do not support file @ params for safety reasons
         $opts[CURLOPT_POSTFIELDS] = http_build_query($params, null, '&');
+        
         $opts[CURLOPT_URL] = $url;
         $opts[CURLOPT_CUSTOMREQUEST] = $method;
         $opts[CURLOPT_USERPWD] = $this->getApiKey() . ":";
+
+
 
         curl_setopt_array($ch, $opts);
 
@@ -207,8 +212,22 @@ class TrueVault {
         }
 
         // handle error within response
+        
         if (is_array($result) && array_key_exists("error", $result)) {
-            $e = new TrueVaultException($result["error"]["message"], $result["error"]["code"], $result["error"]["type"]);
+
+            // internal_server_error doesn't have an error code
+            switch ($result["error"]["type"]) {
+
+                case "internal_server_error":
+                $e = new TrueVaultException($result["error"]["message"], 0, $result["error"]["type"]);
+                break;
+                
+                default:
+                $e = new TrueVaultException($result["error"]["message"], $result["error"]["code"], $result["error"]["type"]);
+                break;
+            }
+            
+            
             curl_close($ch);
             throw $e;
         }
@@ -224,7 +243,6 @@ class TrueVault {
      */
     public function findAllVaults() {
         $vaults = $this->api("accounts/{$this->getAccountId()}/vaults");
-
         if (isset($vaults["vaults"]))
             return $vaults["vaults"];
 
@@ -252,7 +270,6 @@ class TrueVault {
         return $trueVaultSchemas;
     }
 
-
     /**
      * Prints to the error log if you are not in command line mode.
      * @param string $msg Log message
@@ -269,7 +286,9 @@ class TrueVault {
      * @return string
      */
     public function encodeData($data) {
-        return base64_encode(json_encode($data));
+        $json_encoded = json_encode($data);
+        $base64_encoded = base64_encode($json_encoded);
+        return $base64_encoded;
     }
 
     /**
@@ -318,6 +337,7 @@ class TrueVaultDocuments extends TrueVault
 
     /**
      * Create new document
+     * It's good practice to include schema_id in the $data
      * @param mixed $data
      * @param array $params
      * @return mixed
@@ -328,9 +348,16 @@ class TrueVaultDocuments extends TrueVault
         $params["document"] = $this->truevault->encodeData($data);
         $return = $this->truevault->api("vaults/{$this->vaultId}/documents", "POST", $params);
 
-        if (array_key_exists("document_id", $return))
-            $this->lastId = $return["document_id"];
-
+        // this returns 500 Server error sometimes 
+        if(is_array($return))
+        {
+            if (array_key_exists("document_id", $return))
+                $this->lastId = $return["document_id"];
+        }
+        else
+        {
+            throw new TrueVaultException("Server response wasn't json", 0, "not_array");
+        }
         return $return;
     }
 
@@ -393,9 +420,16 @@ class TrueVaultDocuments extends TrueVault
     public function search($searchOptions, $params = array()) {
         $search = $this->truevault->encodeData($searchOptions);
         $return = $this->truevault->api("vaults/{$this->vaultId}/?search_option={$search}", "GET", $params);
-
-        if (array_key_exists("data", $return))
-            return $return["data"];
+        
+        if(is_array($return))
+        {
+            if (array_key_exists("data", $return))
+                return $return["data"];
+        }
+        else
+        {
+            throw new TrueVaultException("Server response wasn't a valid json", 0, "not_array");
+        }
 
         return $return;
     }
@@ -510,7 +544,6 @@ class TrueVaultSchemas extends TrueVault
             foreach ($response["schemas"] as $schema) {
                 $list[$schema["id"]] = $schema["name"];
             }
-
             return $list;
         }
 
